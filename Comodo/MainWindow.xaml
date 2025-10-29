@@ -1,0 +1,17 @@
+﻿<Window x:Class="Comodo.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:Comodo"
+        mc:Ignorable="d"
+        Title="MainWindow" Height="450" Width="800">
+    <Grid>
+        <Viewport3D Name="MainViewport">
+            <Viewport3D.Camera>
+                <!-- Camera positioned to view the 3-room house -->
+                <PerspectiveCamera Position="6,4,12" LookDirection="-6,-2,-12" UpDirection="0,1,0" FieldOfView="45"/>
+            </Viewport3D.Camera>
+        </Viewport3D>
+    </Grid>
+</Window>
