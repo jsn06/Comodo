@@ -12,6 +12,11 @@
                 <!-- Camera positioned to view the 3-room house -->
                 <PerspectiveCamera Position="6,4,12" LookDirection="-6,-2,-12" UpDirection="0,1,0" FieldOfView="45"/>
             </Viewport3D.Camera>
+            <ModelVisual3D>
+                <ModelVisual3D.Content>
+                    <AmbientLight Color="#FFFFFFFF"/>
+                </ModelVisual3D.Content>
+            </ModelVisual3D>
         </Viewport3D>
     </Grid>
 </Window>

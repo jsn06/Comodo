@@ -55,7 +55,6 @@ namespace Comodo
             scene.Children.Add(new AmbientLight(Color.FromScRgb(1.0f, 0.25f, 0.25f, 0.25f)));
 
             // Create two directional lights (white, medium intensity), initial directions opposite and 30° elevation.
-            // Use FromScRgb to set slightly reduced intensity (scRGB channels < 1.0).
             var lightColor = Color.FromScRgb(1.0f, 0.85f, 0.85f, 0.85f); // medium-white
 
             dirLight1 = new DirectionalLight(lightColor, new Vector3D(-0.866, -0.5, 0.0)); // initial pointing at +X side (30° down)
@@ -97,8 +96,11 @@ namespace Comodo
             double totalLength = roomCount * roomWidth + (roomCount - 1) * gap;
 
             // Create gabled roof covering all rooms.
-            double roofBaseY = roomHeight - 0.005;             // tiny sink to avoid z-fighting with boxes' tops
-            double roofRidgeY = roomHeight + roofHeight + 0.01; // tiny lift
+            // IMPORTANT: use a small positive overlap so the roof slightly covers the top faces of the rooms
+            // instead of being slightly lower (which created the visible hole).
+            double roofOverlap = 0.008; // small overlap to hide seam; reduce if z-fighting appears
+            double roofBaseY = roomHeight + roofOverlap;             // slightly above top of rooms to overlap
+            double roofRidgeY = roomHeight + roofHeight + roofOverlap;
             var roofMesh = CreateGabledRoofMesh(totalLength, roomDepth, roofBaseY, roofRidgeY);
             var roofModel = new GeometryModel3D
             {
@@ -116,7 +118,7 @@ namespace Comodo
             var groundOrigin = new Point3D(centerX - groundSize / 2.0, groundY, centerZ - groundSize / 2.0);
 
             var groundMesh = CreatePlaneMesh(groundOrigin, groundSize, groundSize);
-            Material groundMaterial = CreateTiledStoneMaterial("Resources/stone.jpg", tilesPerSide: 16);
+            Material groundMaterial = CreateTiledStoneMaterial("Resources/stone.png", tilesPerSide: 16);
             var groundModel = new GeometryModel3D
             {
                 Geometry = groundMesh,
@@ -218,7 +220,7 @@ namespace Comodo
                 upDir = new Vector3D(0, 0, 1);
             }
 
-            animatedCamera.Position = camPos;           
+            animatedCamera.Position = camPos;   
             animatedCamera.LookDirection = lookDirection;
             animatedCamera.UpDirection = upDir;
         }
@@ -393,6 +395,7 @@ namespace Comodo
             var b2 = new Point3D(length, ridgeY, depth / 2.0);
             var b3 = new Point3D(length, baseY, depth);
 
+            // helper to add a quad (keeps current approach)
             void AddQuad(Point3D p0, Point3D p1, Point3D p2, Point3D p3, Vector3D normal)
             {
                 int idx = m.Positions.Count;
@@ -422,6 +425,38 @@ namespace Comodo
 
             AddQuad(a0, a1, a2, a3, leftNormal);
             AddQuad(b0, b1, b2, b3, rightNormal);
+
+            // --- Close the triangular gables at the front (z=0) and back (z=depth).
+            // We'll add two triangles per end (fan from front/back wall edge to the ridge vertices).
+            void AddTriangleFace(Point3D p0, Point3D p1, Point3D p2)
+            {
+                // compute normal for the triangle (p1 - p0) x (p2 - p0)
+                var n = Vector3D.CrossProduct(p1 - p0, p2 - p0);
+                n.Normalize();
+
+                int idx = m.Positions.Count;
+                m.Positions.Add(p0);
+                m.Positions.Add(p1);
+                m.Positions.Add(p2);
+
+                m.Normals.Add(n);
+                m.Normals.Add(n);
+                m.Normals.Add(n);
+
+                m.TriangleIndices.Add(idx + 0);
+                m.TriangleIndices.Add(idx + 1);
+                m.TriangleIndices.Add(idx + 2);
+            }
+
+            // Front end (z = 0): fan from front top edge (a0,a1) to ridge vertices (a2,a3)
+            // Two triangles: (a0, a1, a2) and (a0, a2, a3)
+            AddTriangleFace(a0, a1, a2);
+            AddTriangleFace(a0, a2, a3);
+
+            // Back end (z = depth): fan from back top edge (b0,b3) to ridge vertices (b2,b1)
+            // Two triangles: (b0, b3, b2) and (b0, b2, b1)
+            AddTriangleFace(b0, b3, b2);
+            AddTriangleFace(b0, b2, b1);
 
             return m;
         }
