@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -8,455 +7,263 @@ using System.Windows.Threading;
 
 namespace Comodo
 {
-    /// <summary>
-    /// Interaction logic for MainWindow.xaml
-    /// </summary>
     public partial class MainWindow : Window
     {
-        // Animation fields
-        private PerspectiveCamera animatedCamera;
-        private DispatcherTimer animationTimer;
-        private Stopwatch stopwatch;
-        private long lastMs;
-        private double t; // progress 0..1 for a single 180° arc (camera)
-        private bool forward = true;
-        private const double arcDurationSeconds = 5.0; // each 180° arc duration (camera)
+        // Câmera em perspectiva usada no Viewport3D
+        PerspectiveCamera camera;
 
-        // Camera path parameters computed after scene creation
-        private Point3D houseCenter;
-        private double cameraRadius;
+        // Timer para atualizar animações (~60 FPS)
+        DispatcherTimer temporizador;
 
-        // Light animation fields
-        private DirectionalLight dirLight1;
-        private DirectionalLight dirLight2;
-        private double lightT; // 0..1 representing full 360° rotation
-        private const double lightRotationDuration = 10.0; // seconds per full 360°
+        // Progresso da câmera (0..1) e das luzes (0..1)
+        double tCamera = 0, tLuz = 0;
+
+        // Controle do ping‑pong da câmera (ida/volta)
+        bool indo = true;
+
+        // Centro da casa (alvo da câmera) e raio do arco vertical da câmera
+        Point3D centroCasa;
+        double raioCamera;
+
+        // Duas luzes direcionais (giram em sentidos opostos)
+        DirectionalLight luz1, luz2;
 
         public MainWindow()
         {
-            InitializeComponent();
-            BuildHouseScene();
+            InitializeComponent();  // carrega o XAML (Viewport3D: Name="MainViewport")
+            MontarCena();           // constrói a cena e inicia animações
         }
 
-        private void BuildHouseScene()
+        void MontarCena()
         {
-            // Parameters
-            double roomWidth = 4.0;
-            double roomHeight = 2.5;
-            double roomDepth = 4.0;
-            int roomCount = 3;
-            double roofHeight = 1.8;
-            double gap = 0.06; // small separation so rooms don't perfectly merge
+            // Dimensões base dos cômodos e do telhado
+            double largura = 4, altura = 2.5, profundidade = 4, separacao = 0.06, alturaTelhado = 1.8;
 
-            // Model group for the whole scene
-            var scene = new Model3DGroup();
+            // Grupo raiz dos modelos 3D
+            var cena = new Model3DGroup();
 
-            // Ambient base light
-            scene.Children.Add(new AmbientLight(Color.FromScRgb(1.0f, 0.25f, 0.25f, 0.25f)));
+            // Luz ambiente fraca (base da iluminação)
+            cena.Children.Add(new AmbientLight(Color.FromScRgb(1, .25f, .25f, .25f)));
 
-            // Create two directional lights (white, medium intensity), initial directions opposite and 30° elevation.
-            var lightColor = Color.FromScRgb(1.0f, 0.85f, 0.85f, 0.85f); // medium-white
+            // Duas luzes direcionais brancas, opostas, com 30° de inclinação para baixo
+            var brancoMedio = Color.FromScRgb(1, .85f, .85f, .85f);
+            luz1 = new DirectionalLight(brancoMedio, new Vector3D(-0.866, -0.5, 0));
+            luz2 = new DirectionalLight(brancoMedio, new Vector3D(0.866, -0.5, 0));
+            cena.Children.Add(luz1);
+            cena.Children.Add(luz2);
 
-            dirLight1 = new DirectionalLight(lightColor, new Vector3D(-0.866, -0.5, 0.0)); // initial pointing at +X side (30° down)
-            dirLight2 = new DirectionalLight(lightColor, new Vector3D(0.866, -0.5, 0.0));  // opposite direction
+            // Materiais sólidos (cores distintas) para cômodos e telhado
+            Material matComodo1 = new DiffuseMaterial(new SolidColorBrush(Color.FromRgb(135, 206, 235)));
+            Material matComodo2 = new DiffuseMaterial(new SolidColorBrush(Color.FromRgb(144, 238, 144)));
+            Material matComodo3 = new DiffuseMaterial(new SolidColorBrush(Color.FromRgb(250, 128, 114)));
+            Material matTelhado = new DiffuseMaterial(new SolidColorBrush(Color.FromRgb(139, 69, 19)));
 
-            scene.Children.Add(dirLight1);
-            scene.Children.Add(dirLight2);
-
-            // Materials (DiffuseMaterial required by the spec)
-            var materialRoom1 = new DiffuseMaterial(new SolidColorBrush(Color.FromRgb(135, 206, 235))); // SkyBlue
-            var materialRoom2 = new DiffuseMaterial(new SolidColorBrush(Color.FromRgb(144, 238, 144))); // LightGreen
-            var materialRoom3 = new DiffuseMaterial(new SolidColorBrush(Color.FromRgb(250, 128, 114))); // Salmon (orange-ish)
-            var materialRoof = new DiffuseMaterial(new SolidColorBrush(Color.FromRgb(139, 69, 19))); // SaddleBrown
-
-            // Create rooms (adjacent boxes), add a small gap between them
-            for (int i = 0; i < roomCount; i++)
+            // Três cômodos (3 caixas lado a lado)
+            for (int i = 0; i < 3; i++)
             {
-                var origin = new Point3D(i * (roomWidth + gap), 0, 0);
-                var mesh = CreateBoxMesh(origin, roomWidth, roomHeight, roomDepth);
-
-                Material material = i switch
-                {
-                    0 => materialRoom1,
-                    1 => materialRoom2,
-                    _ => materialRoom3
-                };
-
-                var model = new GeometryModel3D
-                {
-                    Geometry = mesh,
-                    Material = material,
-                    BackMaterial = material
-                };
-
-                scene.Children.Add(model);
+                var origem = new Point3D(i * (largura + separacao), 0, 0);
+                var malha = CriarCaixa(origem, largura, altura, profundidade);
+                var mat = i == 0 ? matComodo1 : i == 1 ? matComodo2 : matComodo3;
+                cena.Children.Add(new GeometryModel3D { Geometry = malha, Material = mat, BackMaterial = mat });
             }
 
-            // Compute total length based on gaps
-            double totalLength = roomCount * roomWidth + (roomCount - 1) * gap;
+            // Comprimento total (para cobrir com o telhado)
+            double comprimentoTotal = 3 * largura + 2 * separacao;
 
-            // Create gabled roof covering all rooms.
-            // IMPORTANT: use a small positive overlap so the roof slightly covers the top faces of the rooms
-            // instead of being slightly lower (which created the visible hole).
-            double roofOverlap = 0.008; // small overlap to hide seam; reduce if z-fighting appears
-            double roofBaseY = roomHeight + roofOverlap;             // slightly above top of rooms to overlap
-            double roofRidgeY = roomHeight + roofHeight + roofOverlap;
-            var roofMesh = CreateGabledRoofMesh(totalLength, roomDepth, roofBaseY, roofRidgeY);
-            var roofModel = new GeometryModel3D
-            {
-                Geometry = roofMesh,
-                Material = materialRoof,
-                BackMaterial = materialRoof
-            };
-            scene.Children.Add(roofModel);
+            // Alturas do telhado (base e cumeeira)
+            double yBase = altura, yCumeeira = altura + alturaTelhado;
 
-            // --- Textured flat ground plane ---
-            double groundSize = Math.Max(totalLength, roomDepth) * 8.0; // generous coverage
-            double groundY = -0.01;
-            double centerX = totalLength / 2.0;
-            double centerZ = roomDepth / 2.0;
-            var groundOrigin = new Point3D(centerX - groundSize / 2.0, groundY, centerZ - groundSize / 2.0);
+            // Telhado em duas águas + fechamento das empenas
+            var malhaTelhado = CriarTelhado(comprimentoTotal, profundidade, yBase, yCumeeira);
+            cena.Children.Add(new GeometryModel3D { Geometry = malhaTelhado, Material = matTelhado, BackMaterial = matTelhado });
 
-            var groundMesh = CreatePlaneMesh(groundOrigin, groundSize, groundSize);
-            Material groundMaterial = CreateTiledStoneMaterial("Resources/stone.png", tilesPerSide: 16);
-            var groundModel = new GeometryModel3D
-            {
-                Geometry = groundMesh,
-                Material = groundMaterial,
-                BackMaterial = groundMaterial
-            };
-            scene.Children.Add(groundModel);
+            // Chão plano grande o suficiente para a visão da câmera
+            double tamChao = Math.Max(comprimentoTotal, profundidade) * 3.5;
+            var malhaChao = CriarPlano(new Point3D(comprimentoTotal / 2.0 - tamChao / 2.0, -0.01, profundidade / 2.0 - tamChao / 2.0), tamChao, tamChao);
 
-            // Put the scene into the viewport
-            var modelVisual = new ModelVisual3D { Content = scene };
+            // Textura de pedra repetida (sem fallback): exige Resources/stone.png como Resource
+            var matChao = PedraRepetida("Resources/stone.png", 12);
+            cena.Children.Add(new GeometryModel3D { Geometry = malhaChao, Material = matChao, BackMaterial = matChao });
+
+            // Injeta a cena no Viewport3D definido no XAML
             MainViewport.Children.Clear();
-            MainViewport.Children.Add(modelVisual);
+            MainViewport.Children.Add(new ModelVisual3D { Content = cena });
 
-            // Compute house center and camera radius to keep the house fully visible
-            houseCenter = new Point3D(centerX, roomHeight / 2.0, centerZ); // center Y uses mid-height of rooms
-            // radius chosen to comfortably fit the house in view while allowing arc over the roof
-            cameraRadius = Math.Max(Math.Max(totalLength, roomDepth), roomHeight + roofHeight) * 2.2;
+            // Centro da casa (alvo da câmera) e raio do arco da câmera
+            centroCasa = new Point3D(comprimentoTotal / 2.0, altura / 2.0, profundidade / 2.0);
+            raioCamera = Math.Max(Math.Max(comprimentoTotal, profundidade), altura + alturaTelhado) * 2.0;
 
-            // Create and assign animated PerspectiveCamera
-            animatedCamera = new PerspectiveCamera
-            {
-                FieldOfView = 45.0
-            };
-            MainViewport.Camera = animatedCamera;
+            // Câmera perspectiva (FOV 45°) controlada por código
+            camera = new PerspectiveCamera { FieldOfView = 45 };
+            MainViewport.Camera = camera;
+            AtualizarCamera();
 
-            // Initialize animation state: start at one side at house level, looking horizontally
-            t = 0.0; // maps to theta = 0 -> start on one side at house level
-            UpdateAnimatedCamera(); // set initial camera transform
-
-            // Initialize light animation parameter
-            lightT = 0.0;
-
-            // Setup timer + stopwatch for smooth ping-pong animation (camera) and continuous light rotation
-            stopwatch = Stopwatch.StartNew();
-            lastMs = stopwatch.ElapsedMilliseconds;
-            animationTimer = new DispatcherTimer(DispatcherPriority.Render)
-            {
-                Interval = TimeSpan.FromMilliseconds(16) // ~60 FPS
-            };
-            animationTimer.Tick += AnimationTimer_Tick;
-            animationTimer.Start();
+            // Temporizador de animação (~60 FPS)
+            temporizador = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+            temporizador.Tick += (_, __) => Tick();
+            temporizador.Start();
         }
 
-        private void AnimationTimer_Tick(object? sender, EventArgs e)
+        void Tick()
         {
-            long now = stopwatch.ElapsedMilliseconds;
-            double dt = (now - lastMs) / 1000.0;
-            lastMs = now;
+            double dt = 0.016; // passo fixo (~60 FPS)
 
-            // Camera ping-pong 180° arcs (existing behavior)
-            if (forward)
-            {
-                t += dt / arcDurationSeconds;
-                if (t >= 1.0)
-                {
-                    t = 1.0;
-                    forward = false;
-                }
-            }
-            else
-            {
-                t -= dt / arcDurationSeconds;
-                if (t <= 0.0)
-                {
-                    t = 0.0;
-                    forward = true;
-                }
-            }
-            UpdateAnimatedCamera();
+            // Câmera: arco de 180° em 5 s (ping‑pong)
+            double velCam = dt / 5.0; // 1.0 em 5 s
+            tCamera += (indo ? +velCam : -velCam);
+            if (tCamera >= 1) { tCamera = 1; indo = false; }  // topo (180°) → volta
+            if (tCamera <= 0) { tCamera = 0; indo = true; }  // base (0°) → ida
+            AtualizarCamera();
 
-            // Lights continuous rotation: full 360° in lightRotationDuration seconds
-            lightT += dt / lightRotationDuration;
-            // keep in [0,1)
-            if (lightT >= 1.0) lightT -= Math.Floor(lightT);
-
-            UpdateLights(lightT);
+            // Luzes: volta completa (360°) em 10 s, loop contínuo
+            tLuz += dt / 10.0;     // 1.0 em 10 s
+            if (tLuz >= 1) tLuz -= Math.Floor(tLuz);
+            AtualizarLuzes();
         }
 
-        // Map t [0..1] to theta [0..pi] (180°) and update camera position/look/up
-        private void UpdateAnimatedCamera()
+        void AtualizarCamera()
         {
-            // theta: 0 => one side at house level (horizontal look); pi => opposite side at house level
-            double theta = t * Math.PI;
-            double x = houseCenter.X + cameraRadius * Math.Cos(theta);
-            double y = houseCenter.Y + cameraRadius * Math.Sin(theta);
-            double z = houseCenter.Z; // fixed so arc passes centrally over the house
+            // tCamera (0..1) → ângulo θ (0..π) para arco vertical de 180°
+            double theta = tCamera * Math.PI;
 
-            var camPos = new Point3D(x, y, z);
-            var lookDirection = (Vector3D)(houseCenter - camPos);
+            // Posição em arco vertical no plano X‑Y (z fixo no centro da casa)
+            double x = centroCasa.X + raioCamera * Math.Cos(theta);
+            double y = centroCasa.Y + raioCamera * Math.Sin(theta);
+            double z = centroCasa.Z;
 
-            // Choose an UpDirection that is not (anti)parallel to lookDirection
-            var globalUp = new Vector3D(0, 1, 0);
-            Vector3D upDir = globalUp;
-            var lookNorm = lookDirection;
-            lookNorm.Normalize();
-            if (Math.Abs(Vector3D.DotProduct(lookNorm, globalUp)) > 0.99)
-            {
-                // near vertical look -> use Z axis as up to avoid singularity
-                upDir = new Vector3D(0, 0, 1);
-            }
-
-            animatedCamera.Position = camPos;   
-            animatedCamera.LookDirection = lookDirection;
-            animatedCamera.UpDirection = upDir;
+            var pos = new Point3D(x, y, z);
+            camera.Position = pos;                           // coloca a câmera no arco
+            camera.LookDirection = (Vector3D)(centroCasa - pos); // aponta para o centro da casa
+            camera.UpDirection = new Vector3D(0, 1, 0);        // “cima” global (simplificado)
         }
 
-        // Update the two directional lights according to a normalized progress (0..1)
-        private void UpdateLights(double progress)
+        void AtualizarLuzes()
         {
-            // progress -> phi in radians [0, 2π)
-            double phi = progress * Math.PI * 2.0;
-            // Elevation above horizon: 30 degrees -> light points downward (y negative)
-            double elevRad = 30.0 * Math.PI / 180.0;
-            double sinE = Math.Sin(elevRad);    // 0.5
-            double cosE = Math.Cos(elevRad);    // ~0.866
+            // Ângulo φ (0..2π) para rotação horizontal completa
+            double phi = tLuz * 2 * Math.PI;
 
-            // Light 1 rotates with phi
-            double lx1 = cosE * Math.Cos(phi);
-            double lz1 = cosE * Math.Sin(phi);
-            double ly1 = -sinE; // points downward
+            // Inclinação de 30° para baixo
+            double elev = 30 * Math.PI / 180.0;
+            double senE = Math.Sin(elev), cosE = Math.Cos(elev);
 
-            // Light 2 rotates in opposite direction and is always ~opposite-facing initially:
-            // use phi2 = π - phi so at phi=0 it is opposite to light1, and as phi increases it rotates opposite.
+            // Luz 1 gira com φ
+            luz1.Direction = new Vector3D(cosE * Math.Cos(phi), -senE, cosE * Math.Sin(phi));
+
+            // Luz 2 gira ao contrário (oposta): φ2 = π − φ
             double phi2 = Math.PI - phi;
-            double lx2 = cosE * Math.Cos(phi2);
-            double lz2 = cosE * Math.Sin(phi2);
-            double ly2 = -sinE;
-
-            dirLight1.Direction = new Vector3D(lx1, ly1, lz1);
-            dirLight2.Direction = new Vector3D(lx2, ly2, lz2);
+            luz2.Direction = new Vector3D(cosE * Math.Cos(phi2), -senE, cosE * Math.Sin(phi2));
         }
 
-        // Create a large flat plane (single quad) with normals up and basic texture coords 0..1
-        private MeshGeometry3D CreatePlaneMesh(Point3D origin, double width, double depth)
+        // Cria um plano horizontal (Y constante), com UVs 0..1
+        static MeshGeometry3D CriarPlano(Point3D origem, double largura, double profundidade)
         {
             var m = new MeshGeometry3D();
+            var p0 = origem;
+            var p1 = new Point3D(origem.X + largura, origem.Y, origem.Z);
+            var p2 = new Point3D(origem.X + largura, origem.Y, origem.Z + profundidade);
+            var p3 = new Point3D(origem.X, origem.Y, origem.Z + profundidade);
 
-            var p0 = origin;
-            var p1 = new Point3D(origin.X + width, origin.Y, origin.Z);
-            var p2 = new Point3D(origin.X + width, origin.Y, origin.Z + depth);
-            var p3 = new Point3D(origin.X, origin.Y, origin.Z + depth);
-
-            m.Positions.Add(p0);
-            m.Positions.Add(p1);
-            m.Positions.Add(p2);
-            m.Positions.Add(p3);
-
-            // single normal (up) for all vertices
+            m.Positions = new Point3DCollection { p0, p1, p2, p3 };
             var up = new Vector3D(0, 1, 0);
-            m.Normals.Add(up);
-            m.Normals.Add(up);
-            m.Normals.Add(up);
-            m.Normals.Add(up);
-
-            // Texture coordinates cover whole quad; the brush will tile using Viewport
-            m.TextureCoordinates.Add(new System.Windows.Point(0, 0));
-            m.TextureCoordinates.Add(new System.Windows.Point(1, 0));
-            m.TextureCoordinates.Add(new System.Windows.Point(1, 1));
-            m.TextureCoordinates.Add(new System.Windows.Point(0, 1));
-
-            // two triangles
-            m.TriangleIndices.Add(0);
-            m.TriangleIndices.Add(1);
-            m.TriangleIndices.Add(2);
-
-            m.TriangleIndices.Add(0);
-            m.TriangleIndices.Add(2);
-            m.TriangleIndices.Add(3);
-
+            m.Normals = new Vector3DCollection { up, up, up, up };
+            m.TextureCoordinates = new PointCollection{
+        new System.Windows.Point(0,0), new System.Windows.Point(1,0),
+        new System.Windows.Point(1,1), new System.Windows.Point(0,1)
+      };
+            m.TriangleIndices = new Int32Collection { 0, 1, 2, 0, 2, 3 };
             return m;
         }
 
-        // Attempts to create a DiffuseMaterial that tiles the provided image across the plane.
-        // imageRelativePath: path relative to project root (e.g. "Resources/stone.jpg") added as Resource.
-        // tilesPerSide: how many times the image should repeat across the plane (approx).
-        private Material CreateTiledStoneMaterial(string imageRelativePath, int tilesPerSide = 8)
+        // Material de pedra em tile (sem fallback): requer Resources/stone.png como Resource
+        static Material PedraRepetida(string caminhoRelativo, int repeticoesPorLado = 12)
         {
-            try
-            {
-                var uri = new Uri($"pack://application:,,,/{imageRelativePath}", UriKind.Absolute);
-                var bitmap = new BitmapImage(uri);
+            var uri = new Uri($"pack://application:,,,/{caminhoRelativo}", UriKind.Absolute);
+            var bmp = new BitmapImage(uri);
 
-                double tileSize = 1.0 / Math.Max(1, tilesPerSide);
-                var imgBrush = new ImageBrush(bitmap)
-                {
-                    TileMode = TileMode.Tile,
-                    Viewport = new Rect(0, 0, tileSize, tileSize),
-                    ViewportUnits = BrushMappingMode.RelativeToBoundingBox,
-                    Stretch = Stretch.UniformToFill
-                };
-
-                return new DiffuseMaterial(imgBrush);
-            }
-            catch (Exception)
+            double s = 1.0 / Math.Max(1, repeticoesPorLado); // tamanho da “telha” em coordenada relativa
+            var pincel = new ImageBrush(bmp)
             {
-                // Fallback: simple gray material if texture is missing
-                return new DiffuseMaterial(new SolidColorBrush(Color.FromRgb(200, 200, 200)));
-            }
+                TileMode = TileMode.Tile,
+                Viewport = new Rect(0, 0, s, s),
+                ViewportUnits = BrushMappingMode.RelativeToBoundingBox,
+                Stretch = Stretch.UniformToFill
+            };
+            return new DiffuseMaterial(pincel);
         }
 
-        // Build a box mesh (six faces). Normals provided per face.
-        private MeshGeometry3D CreateBoxMesh(Point3D origin, double width, double height, double depth)
+        // Caixa com 6 faces (cada face como quad com normal por produto vetorial)
+        static MeshGeometry3D CriarCaixa(Point3D o, double L, double A, double P)
         {
             var m = new MeshGeometry3D();
 
-            void AddFace(Point3D p0, Point3D p1, Point3D p2, Point3D p3, Vector3D normal)
+            void Face(Point3D a, Point3D b, Point3D c, Point3D d)
             {
-                int index = m.Positions.Count;
-                m.Positions.Add(p0);
-                m.Positions.Add(p1);
-                m.Positions.Add(p2);
-                m.Positions.Add(p3);
-
-                m.Normals.Add(normal);
-                m.Normals.Add(normal);
-                m.Normals.Add(normal);
-                m.Normals.Add(normal);
-
-                // two triangles (0,1,2) and (0,2,3)
-                m.TriangleIndices.Add(index + 0);
-                m.TriangleIndices.Add(index + 1);
-                m.TriangleIndices.Add(index + 2);
-
-                m.TriangleIndices.Add(index + 0);
-                m.TriangleIndices.Add(index + 2);
-                m.TriangleIndices.Add(index + 3);
+                int i = m.Positions.Count;
+                m.Positions.Add(a); m.Positions.Add(b); m.Positions.Add(c); m.Positions.Add(d);
+                var n = Vector3D.CrossProduct(b - a, d - a); n.Normalize();
+                m.Normals.Add(n); m.Normals.Add(n); m.Normals.Add(n); m.Normals.Add(n);
+                m.TriangleIndices.Add(i); m.TriangleIndices.Add(i + 1); m.TriangleIndices.Add(i + 2);
+                m.TriangleIndices.Add(i); m.TriangleIndices.Add(i + 2); m.TriangleIndices.Add(i + 3);
             }
 
-            double x = origin.X;
-            double y = origin.Y;
-            double z = origin.Z;
-
-            // corners
+            double x = o.X, y = o.Y, z = o.Z;
             var p000 = new Point3D(x, y, z);
-            var p100 = new Point3D(x + width, y, z);
-            var p010 = new Point3D(x, y + height, z);
-            var p110 = new Point3D(x + width, y + height, z);
+            var p100 = new Point3D(x + L, y, z);
+            var p010 = new Point3D(x, y + A, z);
+            var p110 = new Point3D(x + L, y + A, z);
+            var p001 = new Point3D(x, y, z + P);
+            var p101 = new Point3D(x + L, y, z + P);
+            var p011 = new Point3D(x, y + A, z + P);
+            var p111 = new Point3D(x + L, y + A, z + P);
 
-            var p001 = new Point3D(x, y, z + depth);
-            var p101 = new Point3D(x + width, y, z + depth);
-            var p011 = new Point3D(x, y + height, z + depth);
-            var p111 = new Point3D(x + width, y + height, z + depth);
-
-            // Front (z)
-            AddFace(p100, p000, p010, p110, new Vector3D(0, 0, -1));
-            // Back
-            AddFace(p001, p101, p111, p011, new Vector3D(0, 0, 1));
-            // Left
-            AddFace(p000, p001, p011, p010, new Vector3D(-1, 0, 0));
-            // Right
-            AddFace(p101, p100, p110, p111, new Vector3D(1, 0, 0));
-            // Top
-            AddFace(p110, p010, p011, p111, new Vector3D(0, 1, 0));
-            // Bottom
-            AddFace(p000, p100, p101, p001, new Vector3D(0, -1, 0));
-
+            Face(p100, p000, p010, p110); // frente
+            Face(p001, p101, p111, p011); // trás
+            Face(p000, p001, p011, p010); // esquerda
+            Face(p101, p100, p110, p111); // direita
+            Face(p110, p010, p011, p111); // topo
+            Face(p000, p100, p101, p001); // base
             return m;
         }
 
-        // Create a gabled roof from two sloped quads. This overload takes explicit baseY and ridgeY
-        private MeshGeometry3D CreateGabledRoofMesh(double length, double depth, double baseY, double ridgeY)
+        // Telhado em duas águas + empenas triangulares
+        static MeshGeometry3D CriarTelhado(double comp, double prof, double yBase, double yCumeeira)
         {
             var m = new MeshGeometry3D();
 
-            // Left roof plane (facing -Z)
-            var a0 = new Point3D(0, baseY, 0);
-            var a1 = new Point3D(length, baseY, 0);
-            var a2 = new Point3D(length, ridgeY, depth / 2.0);
-            var a3 = new Point3D(0, ridgeY, depth / 2.0);
-
-            // Right roof plane (facing +Z)
-            var b0 = new Point3D(0, baseY, depth);
-            var b1 = new Point3D(0, ridgeY, depth / 2.0);
-            var b2 = new Point3D(length, ridgeY, depth / 2.0);
-            var b3 = new Point3D(length, baseY, depth);
-
-            // helper to add a quad (keeps current approach)
-            void AddQuad(Point3D p0, Point3D p1, Point3D p2, Point3D p3, Vector3D normal)
+            void Quad(Point3D a, Point3D b, Point3D c, Point3D d)
             {
-                int idx = m.Positions.Count;
-                m.Positions.Add(p0);
-                m.Positions.Add(p1);
-                m.Positions.Add(p2);
-                m.Positions.Add(p3);
-
-                m.Normals.Add(normal);
-                m.Normals.Add(normal);
-                m.Normals.Add(normal);
-                m.Normals.Add(normal);
-
-                m.TriangleIndices.Add(idx + 0);
-                m.TriangleIndices.Add(idx + 1);
-                m.TriangleIndices.Add(idx + 2);
-
-                m.TriangleIndices.Add(idx + 0);
-                m.TriangleIndices.Add(idx + 2);
-                m.TriangleIndices.Add(idx + 3);
+                int i = m.Positions.Count;
+                m.Positions.Add(a); m.Positions.Add(b); m.Positions.Add(c); m.Positions.Add(d);
+                var n = Vector3D.CrossProduct(b - a, d - a); n.Normalize();
+                m.Normals.Add(n); m.Normals.Add(n); m.Normals.Add(n); m.Normals.Add(n);
+                m.TriangleIndices.Add(i); m.TriangleIndices.Add(i + 1); m.TriangleIndices.Add(i + 2);
+                m.TriangleIndices.Add(i); m.TriangleIndices.Add(i + 2); m.TriangleIndices.Add(i + 3);
             }
 
-            var leftNormal = Vector3D.CrossProduct(a1 - a0, a3 - a0);
-            leftNormal.Normalize();
-            var rightNormal = Vector3D.CrossProduct(b1 - b0, b3 - b0);
-            rightNormal.Normalize();
-
-            AddQuad(a0, a1, a2, a3, leftNormal);
-            AddQuad(b0, b1, b2, b3, rightNormal);
-
-            // --- Close the triangular gables at the front (z=0) and back (z=depth).
-            // We'll add two triangles per end (fan from front/back wall edge to the ridge vertices).
-            void AddTriangleFace(Point3D p0, Point3D p1, Point3D p2)
+            void Tri(Point3D a, Point3D b, Point3D c)
             {
-                // compute normal for the triangle (p1 - p0) x (p2 - p0)
-                var n = Vector3D.CrossProduct(p1 - p0, p2 - p0);
-                n.Normalize();
-
-                int idx = m.Positions.Count;
-                m.Positions.Add(p0);
-                m.Positions.Add(p1);
-                m.Positions.Add(p2);
-
-                m.Normals.Add(n);
-                m.Normals.Add(n);
-                m.Normals.Add(n);
-
-                m.TriangleIndices.Add(idx + 0);
-                m.TriangleIndices.Add(idx + 1);
-                m.TriangleIndices.Add(idx + 2);
+                int i = m.Positions.Count;
+                m.Positions.Add(a); m.Positions.Add(b); m.Positions.Add(c);
+                var n = Vector3D.CrossProduct(b - a, c - a); n.Normalize();
+                m.Normals.Add(n); m.Normals.Add(n); m.Normals.Add(n);
+                m.TriangleIndices.Add(i); m.TriangleIndices.Add(i + 1); m.TriangleIndices.Add(i + 2);
             }
 
-            // Front end (z = 0): fan from front top edge (a0,a1) to ridge vertices (a2,a3)
-            // Two triangles: (a0, a1, a2) and (a0, a2, a3)
-            AddTriangleFace(a0, a1, a2);
-            AddTriangleFace(a0, a2, a3);
+            var a0 = new Point3D(0, yBase, 0);
+            var a1 = new Point3D(comp, yBase, 0);
+            var a2 = new Point3D(comp, yCumeeira, prof / 2);
+            var a3 = new Point3D(0, yCumeeira, prof / 2);
 
-            // Back end (z = depth): fan from back top edge (b0,b3) to ridge vertices (b2,b1)
-            // Two triangles: (b0, b3, b2) and (b0, b2, b1)
-            AddTriangleFace(b0, b3, b2);
-            AddTriangleFace(b0, b2, b1);
+            var b0 = new Point3D(0, yBase, prof);
+            var b1 = new Point3D(0, yCumeeira, prof / 2);
+            var b2 = new Point3D(comp, yCumeeira, prof / 2);
+            var b3 = new Point3D(comp, yBase, prof);
+
+            Quad(a0, a1, a2, a3); // água frontal
+            Quad(b0, b1, b2, b3); // água traseira
+
+            Tri(a0, a1, a2); Tri(a0, a2, a3); // empena frontal
+            Tri(b0, b3, b2); Tri(b0, b2, b1); // empena traseira
 
             return m;
         }
